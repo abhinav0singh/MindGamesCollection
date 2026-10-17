@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cube Graph – solve a cube, watch the math move</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧊</text></svg>">
+<style>
+:root{--bg:#f7f5f0;--ink:#1b1a17;--mute:#6f6b62;--line:#dcd7cb;--panel:#fffdf9;--acc:#1d4fb5}
+@media (prefers-color-scheme:dark){:root{--bg:#141412;--ink:#f1eee6;--mute:#9a958a;--line:#2e2c27;--panel:#1c1b18;--acc:#6f9bff}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:"Avenir Next","Segoe UI",system-ui,sans-serif}
+body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.wrap{max-width:1200px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;gap:12px 32px;justify-content:space-between;align-items:flex-end;margin-bottom:14px}
+h1{font-family:Georgia,"Times New Roman",serif;font-weight:400;font-size:clamp(26px,5vw,40px);margin:0;letter-spacing:-.02em}
+h1 small{display:block;font:14px/1.4 "Avenir Next","Segoe UI",system-ui,sans-serif;color:var(--mute);letter-spacing:0;margin-top:4px}
+.counts{display:flex;gap:36px}
+.counts div{font-size:13px;color:var(--mute)}
+.counts b{display:block;font:400 30px/1 Georgia,serif;color:var(--ink);font-variant-numeric:tabular-nums}
+.counts i{font-style:normal;font-size:11px}
+.stage{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.panel+.panel{background:#faf8f3}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;position:relative;aspect-ratio:1;overflow:hidden}
+.panel canvas{width:100%;height:100%;display:block}
+#cube{touch-action:none;cursor:grab}
+.tag{position:absolute;left:12px;top:10px;font-size:12px;color:var(--mute);pointer-events:none}
+.badge{position:absolute;right:12px;top:10px;font-size:12px;padding:3px 10px;border-radius:99px;background:var(--acc);color:#fff;opacity:0;transition:opacity .3s}
+.badge.on{opacity:1}
+.info{display:flex;flex-wrap:wrap;gap:6px 22px;margin:14px 2px;font-size:14px;color:var(--mute)}
+.info b{color:var(--ink);font-variant-numeric:tabular-nums}
+.ctl{display:flex;flex-wrap:wrap;gap:6px}
+button{font:inherit;font-size:15px;min-width:44px;height:42px;padding:0 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+button:hover{border-color:var(--ink)}button:active{transform:scale(.96)}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button.p{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.sep{width:100%;height:0}
+footer p{margin:14px 0 0}
+footer{margin-top:28px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--mute);line-height:1.5;max-width:70ch}
+@media(max-width:760px){.stage{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Cube Graph<small>Turn the cube. Every move is a permutation, drawn live on the right.</small></h1>
+  </header>
+
+  <div class="stage">
+    <div class="panel"><canvas id="cube" aria-label="3D Rubik's cube"></canvas><span class="tag">Drag a sticker to turn its layer · drag the background to look around</span></div>
+    <div class="panel"><canvas id="graph" aria-label="Permutation graph of the 54 stickers"></canvas><span class="tag" id="cap" style="color:#6f6b62"></span><span class="badge" id="badge">Solved</span></div>
+  </div>
+
+  <div class="info">
+    <span>Moves from solved <b id="sMoves">0</b></span>
+    <span>Stickers home <b id="sHome">54</b>/54</span>
+    <span>Cycles <b id="sCyc">54</b></span>
+    <span>Order of this state <b id="sOrd">1</b></span>
+  </div>
+
+  <div class="ctl" id="moves"></div>
+  <div class="ctl" style="margin-top:10px">
+    <button class="p" id="bScr">Scramble</button>
+    <button class="p" id="bSol">Auto-solve</button>
+    <button id="bRes">Reset</button>
+  </div>
+
+  <footer>
+    <div class="counts" aria-live="polite">
+      <div><b id="cu">–</b>Unique visitors</div>
+      <div><b id="cr">–</b>Recurring visitors <i id="mode"></i></div>
+    </div>
+    <p>Each node is one sticker, coloured by the face it started on, and each face is a fan of nine nodes sitting on three neighbouring rings. The three ring families are the three axes of the cube. Turning a layer moves 20 stickers (12 for a middle slice); the nodes glide around that axis's rings while the cube turns by the same angle. You control the angle: drag slowly and watch both, let go past about 30° to complete the turn, or stop short and it springs back. “Order” is how many times you'd repeat the current scramble as a move sequence before the cube is solved again. Auto-solve plays your moves back in reverse.</p>
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ============ VISITOR COUNTERS ============
+   GitHub Pages has no server, so counts live in a free Firebase Realtime Database.
+   Paste your database URL below (see README steps). Leave "" to run in local demo mode. */
+const DB_URL = "";
+
+(async function track(){
+  const $=id=>document.getElementById(id);
+  let isNew=false, ret=false;
+  try{
+    if(!localStorage.getItem('cg_uid')){localStorage.setItem('cg_uid',Math.random().toString(36).slice(2)+Date.now().toString(36));isNew=true}
+    else if(!sessionStorage.getItem('cg_s') && !localStorage.getItem('cg_ret')){localStorage.setItem('cg_ret','1');ret=true}
+    sessionStorage.setItem('cg_s','1');
+  }catch(e){}
+  try{
+    if(!DB_URL){
+      const g=k=>+(localStorage.getItem(k)||0);
+      if(isNew)localStorage.setItem('cg_lu',g('cg_lu')+1);
+      if(ret)localStorage.setItem('cg_lr',g('cg_lr')+1);
+      $('cu').textContent=g('cg_lu');$('cr').textContent=g('cg_lr');$('mode').textContent='(local demo)';return;
+    }
+    const inc=k=>fetch(`${DB_URL}/stats/${k}.json`,{method:'PUT',body:JSON.stringify({'.sv':{increment:1}})});
+    if(isNew)await inc('unique');
+    if(ret)await inc('recurring');
+    const r=await (await fetch(`${DB_URL}/stats.json`)).json()||{};
+    $('cu').textContent=(r.unique||0).toLocaleString();$('cr').textContent=(r.recurring||0).toLocaleString();
+  }catch(e){$('cu').textContent='–';$('cr').textContent='–'}
+})();
+
+/* ============ CUBE MODEL ============ */
+const FC={U:'#f6f4ee',D:'#f3b72f',F:'#2f7d4a',B:'#1d3f9e',R:'#d9342b',L:'#ee7424'};
+const NR={U:[0,1,0],D:[0,-1,0],F:[0,0,1],B:[0,0,-1],R:[1,0,0],L:[-1,0,0]};
+const FA={D:-90,B:-30,L:30,U:90,F:150,R:-150};          // where each face's blob sits (degrees)
+const FAM={U:1,D:1,L:0,R:0,F:2,B:2};                     // ring family = cube axis
+const MV={U:[1,1,-1],D:[1,-1,1],R:[0,1,-1],L:[0,-1,1],F:[2,1,-1],B:[2,-1,1]};
+const AX=[new THREE.Vector3(1,0,0),new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,1)];
+const V=(x,y,z)=>new THREE.Vector3(x,y,z),HP=Math.PI/2;
+const faceOf=n=>Object.keys(NR).find(k=>NR[k][0]==n.x&&NR[k][1]==n.y&&NR[k][2]==n.z);
+const faceFor=(a,l)=>Object.keys(MV).find(f=>MV[f][0]===a&&MV[f][1]===l);
+const key=(p,n)=>`${p.x+0},${p.y+0},${p.z+0}|${n.x+0},${n.y+0},${n.z+0}`;
+const rot=(v,a,d)=>v.clone().applyAxisAngle(AX[a],d*HP).round();
+
+const cubeEl=document.getElementById('cube');
+const renderer=new THREE.WebGLRenderer({canvas:cubeEl,antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(38,1,.1,50);
+scene.add(new THREE.AmbientLight(0xffffff,.85));
+const dl=new THREE.DirectionalLight(0xffffff,.5);dl.position.set(4,8,6);scene.add(dl);
+let th=.75,ph=1.05;
+function placeCam(){const r=9;cam.position.set(r*Math.sin(ph)*Math.sin(th),r*Math.cos(ph),r*Math.sin(ph)*Math.cos(th));cam.lookAt(0,0,0)}
+placeCam();
+
+const cubies=[],stickers=[],slotIdx={};
+const body=new THREE.BoxGeometry(.97,.97,.97),bodyM=new THREE.MeshLambertMaterial({color:0x151515}),plane=new THREE.PlaneGeometry(.84,.84);
+for(let x=-1;x<=1;x++)for(let y=-1;y<=1;y++)for(let z=-1;z<=1;z++){
+  const c=new THREE.Mesh(body,bodyM);c.position.set(x,y,z);
+  c.userData={p:V(x,y,z),q:new THREE.Quaternion()};scene.add(c);cubies.push(c);
+  for(const f in NR){const n=V(...NR[f]);if(x*n.x+y*n.y+z*n.z!==1)continue;
+    const m=new THREE.Mesh(plane,new THREE.MeshLambertMaterial({color:FC[f]}));
+    m.position.copy(n).multiplyScalar(.486);m.quaternion.setFromUnitVectors(V(0,0,1),n);c.add(m);
+    const s={id:stickers.length,col:FC[f],pos:V(x,y,z),nrm:n,homePos:V(x,y,z),homeNrm:n.clone()};
+    slotIdx[key(s.pos,s.nrm)]=s.id;stickers.push(s);}
+}
+const sIdx=s=>slotIdx[key(s.pos,s.nrm)];
+
+/* ============ GRAPH LAYOUT ============
+   Three families of nested rings (one per axis). Each face is a 3x3 fan whose three rows
+   sit exactly ON three neighbouring rings of its own family. */
+const S=.08,CR=.5;
+const FAMC=a=>{const t=[120,0,240][a]*Math.PI/180;return[Math.cos(t)*.25,Math.sin(t)*.25]};
+const D0=Math.hypot(.25,.5);                       // every blob is D0 away from its own family centre
+const RR=[0,1,2,3,4,5].map(k=>D0+(k-3)*S);         // ring radii (rows use rings 2,3,4)
+function slotXY(i){
+  const s=stickers[i],p=s.homePos,n=s.homeNrm,f=faceOf(n),C=FAMC(FAM[f]);
+  const g=FA[f]*Math.PI/180,tc=Math.atan2(Math.sin(g)*CR-C[1],Math.cos(g)*CR-C[0]);
+  let u,v;if(n.x){u=p.z*n.x;v=p.y}else if(n.y){u=p.x;v=-p.z*n.y}else{u=p.x*n.z;v=p.y}
+  const r=D0+v*S,t=tc+u*S/r;
+  return[C[0]+r*Math.cos(t),C[1]+r*Math.sin(t)];
+}
+const SLOT=stickers.map((_,i)=>slotXY(i));
+
+const gEl=document.getElementById('graph'),gx=gEl.getContext('2d');
+function drawGraph(){
+  const w=gEl.width,h=gEl.height,R=Math.min(w,h)/2*.96,dpr=gEl.width/gEl.clientWidth;
+  gx.clearRect(0,0,w,h);
+  const col=turn?(turn.face?FC[turn.face]:'#1d3f9e'):null;
+  for(let a=0;a<3;a++){const C=FAMC(a),on=turn&&turn.a===a;
+    for(let k=0;k<6;k++){gx.beginPath();gx.arc(w/2+C[0]*R,h/2+C[1]*R,RR[k]*R,0,7);
+      if(on){gx.strokeStyle=col;gx.globalAlpha=.9;gx.lineWidth=2.6*dpr}
+      else{gx.strokeStyle=k===5?'#3a3835':'#77736b';gx.globalAlpha=k===5?.9:k===3?.6:.4;gx.lineWidth=(k===5?2.2:1.4)*dpr}
+      gx.stroke();}}
+  gx.globalAlpha=1;const r=.03*R;
+  const prog=turn?Math.abs(turn.phi)/HP:0,mv=new Map();
+  if(turn&&prog>0)for(const m of turn.aff[turn.phi>=0?1:0])mv.set(m.s.id,m);
+  const node=(x,y,s,big)=>{const X=w/2+x*R,Y=h/2+y*R;
+    if(big){gx.beginPath();gx.arc(X,Y,r*1.7,0,7);gx.fillStyle=col;gx.globalAlpha=.28;gx.fill();gx.globalAlpha=1}
+    gx.beginPath();gx.arc(X,Y,r*(big?1.15:1),0,7);gx.fillStyle=s.col;gx.fill();
+    gx.strokeStyle='#222';gx.lineWidth=1.6*dpr;gx.stroke()};
+  for(const s of stickers)if(!mv.has(s.id)){const p=SLOT[sIdx(s)];node(p[0],p[1],s,turn&&!mv.size&&false)}
+  if(mv.size){const C=FAMC(turn.a); // moving nodes glide around the active family's centre, i.e. along its rings
+    for(const m of mv.values()){const A=SLOT[m.from],B=SLOT[m.to],ax=A[0]-C[0],ay=A[1]-C[1],bx=B[0]-C[0],by=B[1]-C[1],tA=Math.atan2(ay,ax);
+      let d=Math.atan2(by,bx)-tA;while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;
+      const rr=Math.hypot(ax,ay)*(1-prog)+Math.hypot(bx,by)*prog,t=tA+d*prog;
+      node(C[0]+rr*Math.cos(t),C[1]+rr*Math.sin(t),m.s,true);}}
+}
+
+/* ============ TURNS: one layer, one angle, drives cube AND graph ============ */
+let turn=null,queue=[],hist=[];
+function mkTurn(a,l,rec,undo){
+  const aff=[-1,1].map(d=>stickers.filter(s=>s.pos.getComponent(a)===l)
+    .map(s=>({s,from:sIdx(s),to:slotIdx[key(rot(s.pos,a,d),rot(s.nrm,a,d))]})));
+  return{a,l,aff,rec,undo,phi:0,target:0,drag:false,face:faceFor(a,l),
+    cub:cubies.filter(c=>Math.round(c.userData.p.getComponent(a))===l)};
+}
+function next(){if(turn||!queue.length)return;const m=queue.shift();
+  turn=mkTurn(m.a,m.l,m.rec,m.undo);turn.target=m.d*HP;turn.fast=queue.length>2}
+function paint(){const q=new THREE.Quaternion().setFromAxisAngle(AX[turn.a],turn.phi);
+  for(const c of turn.cub){c.position.copy(c.userData.p).applyQuaternion(q);c.quaternion.copy(q).multiply(c.userData.q)}}
+function finish(){
+  const t=turn,k=Math.round(t.target/HP);
+  if(k){const qf=new THREE.Quaternion().setFromAxisAngle(AX[t.a],k*HP);
+    for(const c of t.cub){const u=c.userData;u.p.applyQuaternion(qf).round();u.q.premultiply(qf);c.position.copy(u.p);c.quaternion.copy(u.q)}
+    for(const s of stickers)if(s.pos.getComponent(t.a)===t.l){s.nrm=rot(s.nrm,t.a,k);s.pos=rot(s.pos,t.a,k)}
+    if(t.undo)hist.pop();else if(t.rec)hist.push({a:t.a,l:t.l,d:k});
+  }else for(const c of t.cub){c.position.copy(c.userData.p);c.quaternion.copy(c.userData.q)}
+  turn=null;stats();next();
+}
+let last=performance.now(),capTxt='';
+function tick(now){
+  const dt=Math.min(.05,(now-last)/1000);last=now;
+  if(turn&&!turn.drag){
+    const diff=turn.target-turn.phi,fast=turn.fast;
+    let step=diff*(1-Math.exp(-(fast?30:16)*dt));const mn=(fast?5:2.8)*dt;
+    if(Math.abs(step)<mn)step=Math.sign(diff)*Math.min(mn,Math.abs(diff));
+    turn.phi+=step;
+    if(Math.abs(turn.target-turn.phi)<.002){turn.phi=turn.target;paint();finish()}
+  }
+  if(turn)paint();
+  renderer.render(scene,cam);drawGraph();
+  const c=turn&&turn.phi!==0?`${turn.face?'Turning '+turn.face:'Turning middle slice'} · ${turn.aff[1].length} nodes slide along the rings`:'Drag a layer: the matching nodes ride the rings';
+  if(c!==capTxt){capTxt=c;document.getElementById('cap').textContent=c}
+  requestAnimationFrame(tick);
+}
+const push=(a,l,d,rec=true,undo=false)=>{queue.push({a,l,d,rec,undo});next()};
+const faceMove=(f,pr)=>{const[a,l,d]=MV[f];push(a,l,pr?-d:d)};
+
+function stats(){
+  const perm=stickers.map(sIdx);let home=0,cyc=0,ord=1;const seen=new Array(54).fill(0);
+  const gcd=(a,b)=>b?gcd(b,a%b):a;
+  for(let i=0;i<54;i++){if(perm[i]===i)home++;if(seen[i])continue;let n=0,j=i;while(!seen[j]){seen[j]=1;j=perm[j];n++}cyc++;ord=ord/gcd(ord,n)*n}
+  document.getElementById('sMoves').textContent=hist.length;
+  document.getElementById('sHome').textContent=home;
+  document.getElementById('sCyc').textContent=cyc;
+  document.getElementById('sOrd').textContent=ord;
+  document.getElementById('badge').classList.toggle('on',home===54);
+}
+
+/* ============ UI ============ */
+const mvEl=document.getElementById('moves');
+for(const f of 'UDLRFB')for(const pr of[0,1]){const b=document.createElement('button');b.textContent=f+(pr?"′":"");
+  b.setAttribute('aria-label',f+(pr?' counter-clockwise':' clockwise'));b.onclick=()=>faceMove(f,pr);mvEl.appendChild(b)}
+document.getElementById('bScr').onclick=()=>{if(turn||queue.length)return;let lastA=-1;
+  for(let i=0;i<20;i++){let a;do a=Math.floor(Math.random()*3);while(a===lastA);lastA=a;
+    push(a,Math.random()<.5?1:-1,Math.random()<.5?1:-1)}};
+document.getElementById('bSol').onclick=()=>{if(turn||queue.length||!hist.length)return;
+  for(const m of hist.slice().reverse())push(m.a,m.l,-m.d,false,true)};
+document.getElementById('bRes').onclick=()=>location.reload();
+
+/* drag a sticker: the layer follows your finger, graph nodes follow the same angle.
+   Let go past ~30 degrees and it snaps to the quarter turn; less and it springs back. */
+const ray=new THREE.Raycaster();let down=null,orb=null;
+cubeEl.addEventListener('pointerdown',e=>{
+  cubeEl.setPointerCapture(e.pointerId);
+  while(turn||queue.length){if(!turn)next();turn.phi=turn.target;turn.drag=false;finish()} // never make the user wait
+  scene.updateMatrixWorld(true);
+  const r=cubeEl.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1),cam);
+  const h=ray.intersectObjects(cubies,true)[0];
+  if(h){const n=h.face.normal.clone().transformDirection(h.object.matrixWorld).round();
+    down={n,p:h.point.clone().addScaledVector(n,-.5).round(),x:e.clientX,y:e.clientY}}
+  else orb={x:e.clientX,y:e.clientY};
+});
+cubeEl.addEventListener('pointermove',e=>{
+  if(orb){th-=(e.clientX-orb.x)*.008;ph=Math.max(.15,Math.min(Math.PI-.15,ph-(e.clientY-orb.y)*.008));orb={x:e.clientX,y:e.clientY};placeCam();return}
+  if(!down)return;const dx=e.clientX-down.x,dy=e.clientY-down.y;
+  if(!turn){
+    if(Math.hypot(dx,dy)<9)return;
+    const r=cubeEl.getBoundingClientRect(),sc=v=>{const q=v.clone().project(cam);return[q.x*r.width/2,-q.y*r.height/2]};
+    const s0=sc(down.p);let best=null,bs=-1e9,bv=null;
+    for(let i=0;i<3;i++){if(down.n.getComponent(i))continue;
+      for(const sg of[1,-1]){const t=V(0,0,0).setComponent(i,sg),s1=sc(down.p.clone().add(t)),sv=[s1[0]-s0[0],s1[1]-s0[1]],sco=dx*sv[0]+dy*sv[1];
+        if(sco>bs){bs=sco;best=t;bv=sv}}}
+    const a=down.n.clone().cross(best),ai=[a.x,a.y,a.z].findIndex(c=>c!==0),len=Math.hypot(bv[0],bv[1]);
+    turn=mkTurn(ai,down.p.getComponent(ai),true,false);turn.drag=true;
+    turn.sgn=a.getComponent(ai);turn.len=len;turn.ux=bv[0]/len;turn.uy=bv[1]/len;
+  }
+  if(turn.drag){const dist=dx*turn.ux+dy*turn.uy;
+    turn.phi=Math.max(-HP,Math.min(HP,turn.sgn*dist/(turn.len*1.4)))}
+});
+const end=()=>{if(turn&&turn.drag){turn.drag=false;turn.target=Math.abs(turn.phi)>.5?Math.sign(turn.phi)*HP:0}down=null;orb=null};
+cubeEl.addEventListener('pointerup',end);cubeEl.addEventListener('pointercancel',end);
+
+function size(){
+  const c=cubeEl.parentElement,w=c.clientWidth,h=c.clientHeight;
+  renderer.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix();
+  const d=Math.min(devicePixelRatio,2);gEl.width=w*d;gEl.height=h*d;
+}
+new ResizeObserver(size).observe(cubeEl.parentElement);size();
+stats();requestAnimationFrame(tick);
+</script>
+</body>
+</html>
